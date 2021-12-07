@@ -1,0 +1,36 @@
+---
+title: "Test Script"
+author: "Hong Shi"
+date: "12/6/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(here)
+library(stargazer)
+library(kableExtra)
+library(finalfit)
+library(broom)
+#install.packages("rdpower")
+#library(rdpower)
+library(modelsummary)
+#install.packages("ggpubr")
+#library(ggpubr)
+```
+
+```{r}
+raw_bank <- read.csv(here("inputs/data/bank-additional-full.csv"), sep = ";")
+```
+
+```{r}
+sep_bank <- raw_bank
+```
+
+```{r}
+?read.csv
+```
+
+
