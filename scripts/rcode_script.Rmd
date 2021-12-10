@@ -1,0 +1,1132 @@
+---
+title: "Test Script"
+author: "Hong Shi"
+date: "12/6/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ROSE)
+library(tidyverse)
+library(here)
+library(kableExtra)
+library(finalfit)
+library(broom)
+
+library(modelsummary)
+library(cvms)
+library(MLmetrics)
+library(scales)
+library(randomForest)
+library(rpart)
+library(rattle)
+library(gbm)
+#install.packages("naivebayes")
+library(naivebayes)
+#install.packages("ggpubr")
+#library(ggpubr)
+```
+
+
+
+```{r}
+raw_bank <- read.csv(here("inputs/data/bank-additional-full.csv"), sep = ";")
+```
+
+```{r}
+head(raw_bank)
+```
+
+# Attribute information
+
+## Check datatype of each feature (for datatype confirmation):
+
+```{r}
+sapply(raw_bank, class)
+```
+
+An *x* variable suggests that this variable needs to be recoded accordingly.
+   
+### bank client data:
+   1 - age (numeric)
+   *2* - job : type of job (categorical:"admin.","blue-collar","entrepreneur","housemaid","management","retired","self-employed","services","student","technician","unemployed","unknown")
+   *3* - marital : marital status (categorical: "divorced","married","single","unknown"; note: "divorced" means divorced or widowed)
+   *4* - education (categorical: "basic.4y","basic.6y","basic.9y","high.school","illiterate","professional.course","university.degree","unknown")
+   *5* - default: has credit in default? (categorical: "no","yes","unknown")
+   *6* - housing: has housing loan? (categorical: "no","yes","unknown")
+   *7* - loan: has personal loan? (categorical: "no","yes","unknown")
+   
+### related with the last contact of the current campaign:
+   *8* - contact: contact communication type (categorical: "cellular","telephone") 
+   *9* - month: last contact month of year (categorical: "jan", "feb", "mar", ..., "nov", "dec")
+  *10* - day_of_week: last contact day of the week (categorical: "mon","tue","wed","thu","fri")
+  **11**(delete) - duration: last contact duration, in seconds (numeric). Important note:  this attribute highly affects the output target (e.g., if duration=0 then y="no"). Yet, the duration is not known before a call is performed. Also, after the end of the call y is obviously known. Thus, this input should only be included for benchmark purposes and should be discarded if the intention is to have a realistic predictive model.
+
+### other attributes:
+  12 - campaign: number of contacts performed during this campaign and for this client (numeric, includes last contact)
+  **13** - pdays: number of days that passed by after the client was last contacted from a previous campaign (numeric; 999 means client was not previously contacted)
+  **14** - previous: number of contacts performed before this campaign and for this client (numeric)
+  *15* - poutcome: outcome of the previous marketing campaign (categorical: "failure","nonexistent","success")
+  
+### social and economic context attributes
+  16 - emp.var.rate: employment variation rate - quarterly indicator (numeric)
+  17 - cons.price.idx: consumer price index - monthly indicator (numeric)     
+  18 - cons.conf.idx: consumer confidence index - monthly indicator (numeric)     
+  19 - euribor3m: euribor 3 month rate - daily indicator (numeric)
+  20 - nr.employed: number of employees - quarterly indicator (numeric)
+
+###Output variable (desired target):
+  21 - y - has the client subscribed a term deposit? (binary: "yes","no")
+
+Therefore, features need to be recoded into factor: `job`, `martial`, `education`, `default`, `housing`, `loan`, `contact`, `month`, `day_of_week`, `poutcome`. 
+
+`Duration` need to be deleted as suggested by attribute information
+
+```{r}
+# check if need to delete duration
+raw_bank %>% filter(duration <= 60)
+```
+
+`pdays` and `previous` will be recoded into `pcampaign` to indicate whether a client previously received a campaign or not
+
+
+```{r}
+# check if need to recode pdays
+raw_bank %>% filter(pdays == 999)
+```
+
+```{r}
+# check previous count for recoding
+raw_bank %>% group_by(previous) %>% count()
+```
+
+```{r}
+cor.test(raw_bank$pdays, raw_bank$previous)
+```
+
+
+## Data Preprocessing:
+
+```{r attributeinfo, fig.cap='Attribute Information of Term Deposit Campaign Dataset', echo = FALSE}
+# Attribute information from UCI Machine Learning Repository https://archive.ics.uci.edu/ml/datasets/Bank+Marketing#
+tibble(
+  " " = list("Bank Client Data", "", "", "", "", "", "", "Related to Last Contact of Current Campaign", "", "", "", "Related to Current and Previous Campaign", "", "", "", "Social and Economoic Context Attributes", "", "", "", "", "Target Label"),
+  "Name" = list("age", "job", "marital", "education", "default", "housing", "loan", "contact", "month", "day_of_week", "duration", "campaign", "pdays", "previous", "poutcome", "emp.var.rate", "cons.price.idx", "cons.conf.idx", "euribor3m", "nr.employed", "y"),
+  "Datatype" = list("Numeric", "Categorical", "Categorical", "Categorical", "Categorical", "Categorical", "Categorical", "Categorical", "Categorical", "Categorical", "Numeric", "Numeric", "Numeric", "Numeric", "Categorical","Numeric","Numeric","Numeric","Numeric","Numeric", "Categorical"),
+  "Description" = list("Age", "Type of Job(admin, blue-collar, entrepreneur, housemaid, management, retired, self-employed, services, student, technician, unemployed, unknown)", "Marital status (divorced, married, single, unknown)", "Education level (basic.4y, basic.6y, basic.9y, high.school, illiterate, professional.course, university degree, unknown)", "Has credit in default? (no, yes,unknown)", "Has housing loan? (no, yes,unknown)", "Has personal loan? (no, yes,unknown)","Contact communication type (cellular, telephone)", "Last contact month of year (jan, feb, ... , nov, dec)", "Last contact day of week (mon, tue, wed, thu, fri)", "Last contact duration, in seconds", "Total contacts performed during current campaign with the client, including last contact", "Number of days after the client was last contacted from a previous campaign", "Number of contacts performed before current campaign with the client", "Outcome of previous campaign (failure, success, nonexistent)", "Quarterly indicator of employment variation rate", "Monthly indicator of consumer price index", "Monthly indicator of consumer confidence index", "Daily indicator of euribor 3 month rate", "Quarterly indicator of number of employees", "Has the client subscribed " ),
+) %>% 
+  kable(caption = "Attribute Information of Term Deposit Campaign Dataset",
+        align = "cccc") %>% 
+  kable_classic(full_width = F, html_font = "Cambria") %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  column_spec(1,bold=T, width = "3cm") %>% 
+  row_spec(0, bold = T) %>% 
+  column_spec(4, width = "6cm")
+```
+
+**Note that need to delete duration**
+
+Encode:
+
+```{r}
+raw_bank %>% group_by(pdays) %>% count() %>% filter(pdays == 999) %>% mutate(prop = n/nrow(raw_bank))
+```
+
+```{r}
+raw_bank %>% group_by(previous) %>% count() %>% filter(previous == 0) %>% mutate(prop = n/nrow(raw_bank))
+```
+
+
+```{r}
+clean_bank <- raw_bank
+
+# Drop duration feature
+clean_bank$duration <- NULL
+
+# Combine pdays, previous into pcampaign feature
+clean_bank$pcampaign <- ifelse(clean_bank$pdays!= 999, "yes", "no")
+
+# Drop pdays, previous feature
+clean_bank$pdays <- NULL
+clean_bank$previous <- NULL
+```
+
+
+Recode character features into factor: `job`, `martial`, `education`, `default`, `housing`, `loan`, `contact`, `month`, `day_of_week`, `poutcome`, and `pcampaign`
+
+
+
+```{r}
+# recode into factor
+clean_bank$job <- as.factor(clean_bank$job)
+clean_bank$marital <- as.factor(clean_bank$marital)
+clean_bank$education <- as.factor(clean_bank$education)
+clean_bank$default <- as.factor(clean_bank$default)
+clean_bank$housing <- as.factor(clean_bank$housing)
+clean_bank$loan <- as.factor(clean_bank$loan)
+clean_bank$contact <- as.factor(clean_bank$contact)
+clean_bank$month <- as.factor(clean_bank$month)
+clean_bank$day_of_week <- as.factor(clean_bank$day_of_week)
+clean_bank$poutcome <- as.factor(clean_bank$poutcome)
+clean_bank$pcampaign <- as.factor(clean_bank$pcampaign)
+clean_bank$y <- as.factor(clean_bank$y)
+#change y into binary variable
+#clean_bank$y <- ifelse(clean_bank$y == "no", 0, 1)
+```
+
+
+```{r}
+sapply(clean_bank, class)
+```
+
+```{r}
+clean_bank %>% group_by(y) %>% count() %>% mutate(Proportion = round(n/nrow(clean_bank), 3))
+```
+
+
+```{r}
+# for ML imbalance data part
+clean_bank %>% group_by(y) %>% count() %>% mutate(Proportion = paste0(round(n/nrow(clean_bank)*100, 2),"%")) %>% 
+  kable(caption = "Term Deposit Campaign Outcome",
+        align = "cc", col.names = c("Subscription Decision", "Count", "Proportion")) %>% 
+  kable_classic(full_width = F, html_font = "Cambria") %>% 
+  kable_styling(latex_options = "HOLD_position")
+```
+
+## Exploratory Data Analysis
+
+```{r}
+class(clean_bank$age)
+```
+
+### Age
+
+```{r}
+ggplot(data = clean_bank, aes(x = age, y = ..density..,color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5,binwidth = 4)+
+  theme_minimal()+
+  labs(title = "Distribution of Term Deposit Subscription by Client Age",
+       x = "Age",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+### Job
+
+```{r, fig.width= 12, fig.height=8}
+# could be better if find a percentage grouped bar chart
+ggplot(data = clean_bank, aes(x = job,color = y, fill = y))+
+  geom_bar(stat = "count", position = "dodge",alpha =0.7)+
+  theme_minimal()+
+  labs(title = "Density Distribution of Client Age",
+       x = "Age",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+**Attach in front**
+
+```{r, fig.width= 9, fig.height=6}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x =job,color = y, fill = y),position = "fill",alpha =0.7)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Client Job",
+       x = "Type of Job",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+### Marital
+
+```{r}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x =marital,color = y, fill = y),position = "fill",alpha =0.7, width = 0.5)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Marital Status",
+       x = "Marital Status",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+### education
+
+```{r}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x =education,color = y, fill = y),position = "fill",alpha =0.7, width = 0.5)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Education Level",
+       x = "Level of Education",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+### default
+
+
+
+```{r}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = default,color = y, fill = y),position = "fill",alpha =0.7, width = 0.3)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Default Status",
+       x = "Whether has Credit in Default",
+       y = "Proportion",
+       caption = "Only three clients have default record so default status may not illustrate subscription pattern")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+### Housing Loan
+
+```{r}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = housing,color = y, fill = y),position = "fill",alpha =0.7)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Housing Loan",
+       x = "Whether has Housing Loan",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+### Loan 
+
+```{r}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = housing,color = y, fill = y),position = "fill",alpha =0.7)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Personal Loan",
+       x = "Whether has Personal Loan",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+### Contact
+
+**Put in front**
+
+```{r, fig.width = 6, fig.height= 3}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = contact,color = y, fill = y),position = "fill",alpha =0.7)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Last Contact Type",
+       x = "Contact Type",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+### month
+
+**Put in front**
+
+```{r}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = month,color = y, fill = y),position = "dodge",alpha =0.7)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Last Contact Month",
+       x = "Last Contact Month",
+       y = "Frequency Count")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_x_discrete(limits = c("jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"))  
+```
+
+### day_of_week
+
+```{r}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = day_of_week,color = y, fill = y),position = "fill",alpha =0.7, width = 0.4)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Last Contact Day of Week",
+       x = "Day of Week",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+### campaign
+
+**consider discard this plot**
+
+```{r}
+ggplot(data = clean_bank, aes(x = campaign, y=..density.., color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5, binwidth = 2)+
+  theme_minimal()+
+  labs(title = "Density Distribution of Contacts Performed during Current Campaign",
+       x = "Number of Contacts",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+### pcampaign
+
+**Put in front**
+
+```{r}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = pcampaign,color = y, fill = y),position = "fill",alpha =0.7,width = 0.4)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Previous Campaign",
+       x = "Whether Received Previous Campaign",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+### poutcome
+
+**Put in front** 
+
+```{r}
+had_campaign <- clean_bank %>% filter(pcampaign == "yes")
+```
+
+```{r}
+ggplot(data = had_campaign)+
+  geom_bar(aes(x = poutcome,color = y, fill = y),position = "dodge",alpha =0.7)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Previous Campaign Outcome",
+       x = "Previous Outcome",
+       y = "Frequency Count",
+       caption = "*Only for Clients who Received Previous Marketing Campaign")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+### emp.var.rate
+
+**Put in front** 
+
+```{r}
+ggplot(data = clean_bank, aes(x = emp.var.rate, y = ..density..,color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5, binwidth = 0.2)+
+  theme_minimal()+
+  labs(title = "Distribution of Subscription by Employment Variation Rate",
+       x = "Employment Variation Rate (Quarterly)",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+### cons.price.idx
+
+
+```{r}
+ggplot(data = clean_bank, aes(x = cons.price.idx,y = ..density.., color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5, binwidth = 0.15)+
+  theme_minimal()+
+  labs(title = "Distribution of Subscription by Consumer Price Index",
+       x = "Comsumer Price Index (Monthly)",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+### cons.conf.idx
+
+```{r}
+ggplot(data = clean_bank, aes(x = cons.conf.idx,y = ..density..,color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5, binwidth = 1.5)+
+  theme_minimal()+
+  labs(title = "Distribution of Subscription by Consumer Confidence Index",
+       x = "Comsumer Confidence Index (Monthly)",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+### euribor3m
+
+**Put in front**
+
+```{r}
+ggplot(data = clean_bank, aes(x = euribor3m,y = ..density..,color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5, binwidth = 0.25)+
+  theme_minimal()+
+  labs(title = "Distribution of Subscription by Euribor 3 Month Rate",
+       x = "Euribor 3 Month Rate (Daily)",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+### nr.employed
+
+**Put in front**
+
+```{r}
+ggplot(data = clean_bank, aes(x = nr.employed,y = ..density..,color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5, binwidth = 20)+
+  theme_minimal()+
+  labs(title = "Distribution of Subscription by Number of Employees",
+       x = "Number of Employees (Quarterly)",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+# Build classification models 
+
+## Logistic Regression
+
+```{r, warning=FALSE}
+# Random split
+set.seed(2167)
+
+inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+tr_df <- clean_bank[inds,]
+te_df <- clean_bank[-inds,]
+
+# over sample the training set 
+resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+
+#build logistic regression
+logistic_regression <- glm(y~., data = resampled_tr, family = binomial)
+  
+preds <- predict(logistic_regression, newdata = te_df, type = "response")
+
+predict_binary <- ifelse(preds < 0.5, "no", "yes")
+
+accuracy <-  round(sum(predict_binary == te_df$y)/nrow(te_df),4)  
+accuracy
+```
+
+```{r}
+F1_Score(y_pred = predict_binary, y_true = te_df$y)
+```
+
+```{r}
+table(resampled_tr$y)
+```
+
+
+```{r}
+summary(preds)
+```
+
+
+```{r, warning=FALSE}
+basic_table <- table(prediction = predict_binary, target = te_df$y)
+cfmatrix <- as_tibble(basic_table)
+plot_confusion_matrix(cfmatrix, target_col = "target", prediction_col = "prediction", counts_col = "n",
+                      add_col_percentages = FALSE, add_row_percentages = FALSE, counts_on_top = TRUE, darkness = 0.9) %>% 
+  labs(title = "Confusion Matrix of Logistic Regression")
+```
+
+### 5 fold cv
+
+```{r, warning=FALSE}
+# Obtain a robust estimate of the test-set accuracy using 5-fold cross-validation
+set.seed(2167)
+cv_values <- rep(0,5)
+cv_f1 <- rep(0,5)
+
+for(i in 1:length(cv_values)){
+  # split data
+  inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+  tr_df <- clean_bank[inds,]
+  te_df <- clean_bank[-inds,]
+  resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+  
+  #build logistic regression
+  logistic_regression <- glm(y~., data = resampled_tr, family = binomial)
+  
+  preds <- predict(logistic_regression, newdata = te_df, type = "response")
+  predict_binary <- ifelse(preds < 0.5, "no", "yes")
+  accuracy <-  round(sum(predict_binary == te_df$y)/nrow(te_df),4)  
+  
+  f1_score <- round(F1_Score(y_pred = predict_binary, y_true = te_df$y),4)
+  cv_values[i] <- accuracy
+  cv_f1[i] <- f1_score
+}
+
+cv_values
+cv_f1
+```
+
+
+```{r}
+mean(cv_values)
+mean(cv_f1)
+```
+## Naive Bayes
+
+```{r, warning=FALSE}
+# https://towardsdatascience.com/laplace-smoothing-in-na%C3%AFve-bayes-algorithm-9c237a8bdece
+# Random split
+set.seed(2167)
+
+inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+tr_df <- clean_bank[inds,]
+te_df <- clean_bank[-inds,]
+
+# resample the training set 
+resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+
+#build naive bayes
+n_b <- naive_bayes(y~.,usekernel = TRUE, data = resampled_tr)
+  
+preds <- predict(n_b, newdata = te_df, type = "class")
+
+accuracy <-  round(sum(preds == te_df$y)/nrow(te_df),4)  
+
+accuracy
+```
+
+```{r}
+F1_Score(y_pred = preds, y_true = te_df$y)
+```
+### confusion matrix
+
+```{r, warning=FALSE}
+basic_table <- table(prediction = preds, target = te_df$y)
+cfmatrix <- as_tibble(basic_table)
+plot_confusion_matrix(cfmatrix, target_col = "target", prediction_col = "prediction", counts_col = "n",
+                      add_col_percentages = FALSE, add_row_percentages = FALSE, counts_on_top = TRUE, darkness = 0.9)
+```
+
+### 5 fold cv naive bayes
+
+```{r, warning=FALSE}
+# Obtain a robust estimate of the test-set accuracy using 5-fold cross-validation
+set.seed(2167)
+cv_values <- rep(0,5)
+cv_f1 <- rep(0,5)
+
+for(i in 1:length(cv_values)){
+  # split data
+  inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+  tr_df <- clean_bank[inds,]
+  te_df <- clean_bank[-inds,]
+  # resample data
+  resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+  
+  #build naive bayes
+  n_b <- naive_bayes(y~.,usekernel = TRUE ,data = resampled_tr)
+  
+  preds <- predict(n_b, newdata = te_df, type = "class")
+  
+  accuracy <-  round(sum(preds == te_df$y)/nrow(te_df),4)
+  
+  f1_score <- round(F1_Score(y_pred = preds, y_true = te_df$y),4)
+  cv_values[i] <- accuracy
+  cv_f1[i] <- f1_score
+}
+
+cv_values
+cv_f1
+```
+
+```{r}
+# 5-fold accuracy and f1 score of naive bayes
+mean(cv_values)
+mean(cv_f1)
+```
+
+## Decision Tree
+
+
+```{r, warning=FALSE}
+# Random split
+set.seed(2167)
+
+inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+tr_df <- clean_bank[inds,]
+te_df <- clean_bank[-inds,]
+
+# resample the training set 
+resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+
+# build decision tree
+decision_tree1 <- rpart(y~., data = resampled_tr)
+  
+preds <- predict(decision_tree1, newdata = te_df, type = "class")
+
+#predict_binary <- ifelse(preds < 0.5, "no", "yes")
+
+#accuracy <-  round(sum(predict_binary == te_df$y)/nrow(te_df),4)  
+#accuracy
+accuracy <-  round(sum(preds == te_df$y)/nrow(te_df),4)  
+
+accuracy
+```
+
+```{r}
+# F1 score
+F1_Score(y_pred = preds, y_true = te_df$y)
+```
+
+### confusion matrix
+
+```{r, warning=FALSE}
+basic_table <- table(prediction = preds, target = te_df$y)
+cfmatrix <- as_tibble(basic_table)
+plot_confusion_matrix(cfmatrix, target_col = "target", prediction_col = "prediction", counts_col = "n",
+                      add_col_percentages = FALSE, add_row_percentages = FALSE, counts_on_top = TRUE, darkness = 0.9)
+```
+
+### 5 fold cv decision tree
+
+```{r, warning=FALSE}
+# Obtain a robust estimate of the test-set accuracy using 5-fold cross-validation
+set.seed(2167)
+cv_values <- rep(0,5)
+cv_f1 <- rep(0,5)
+
+for(i in 1:length(cv_values)){
+  # split data
+  inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+  tr_df <- clean_bank[inds,]
+  te_df <- clean_bank[-inds,]
+  # resample data
+  resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+  
+  #build decision tree
+  decision_tree <- rpart(y~., data = resampled_tr)
+  
+  preds <- predict(decision_tree, newdata = te_df, type = "class")
+  
+  accuracy <-  round(sum(preds == te_df$y)/nrow(te_df),4)
+  
+  f1_score <- round(F1_Score(y_pred = preds, y_true = te_df$y),4)
+  cv_values[i] <- accuracy
+  cv_f1[i] <- f1_score
+}
+
+cv_values
+cv_f1
+```
+
+```{r}
+# 5-fold accuracy and f1 score of naive bayes
+mean(cv_values)
+mean(cv_f1)
+```
+
+### Check if need to Prune the tree
+
+The CP table and the tree plot of the original decision tree suggest that the tree has already reaches its lowest cross validation error when CP=0.01 at 2 splits.
+
+```{r}
+# check the Cost-Complexity Pruning output
+cp_output <- data.frame(decision_tree1$cptable)
+cp_output %>% kable() %>% kable_styling()
+```
+
+
+```{r}
+fancyRpartPlot(decision_tree1, yesno = 2, caption = "Tree Plot of Decision Tree")
+```
+
+
+## Random Forest
+
+
+Set `mtry` based on the number of features $m {\approx}\sqrt{p}$  for building the random forest:
+
+```{r}
+# features used except Salary
+num_feature <- ncol(clean_bank)-1
+# mtry value
+round(sqrt(num_feature),0)
+```
+
+Build a random forest to predict subscription decision `y`:
+
+```{r, warning=FALSE}
+# Random split
+set.seed(2167)
+
+inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+tr_df <- clean_bank[inds,]
+te_df <- clean_bank[-inds,]
+
+# resample the training set 
+resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+
+# build decision tree
+r_f1 <-  randomForest(y~., data = resampled_tr, mtry = 4, importance =TRUE)
+  
+preds <- predict(r_f1, newdata = te_df, type = "class")
+
+#predict_binary <- ifelse(preds < 0.5, "no", "yes")
+
+#accuracy <-  round(sum(predict_binary == te_df$y)/nrow(te_df),4)  
+#accuracy
+accuracy <-  round(sum(preds == te_df$y)/nrow(te_df),4)  
+
+accuracy
+```
+
+```{r}
+F1_Score(y_pred = preds, y_true = te_df$y)
+```
+
+### confusion matrix
+
+```{r, warning=FALSE}
+basic_table <- table(prediction = preds, target = te_df$y)
+cfmatrix <- as_tibble(basic_table)
+plot_confusion_matrix(cfmatrix, target_col = "target", prediction_col = "prediction", counts_col = "n",
+                      add_col_percentages = FALSE, add_row_percentages = FALSE, counts_on_top = TRUE, darkness = 0.9)
+```
+
+### 5 fold cv random forest
+
+```{r, warning=FALSE}
+# Obtain a robust estimate of the test-set accuracy using 5-fold cross-validation
+set.seed(2167)
+cv_values <- rep(0,5)
+cv_f1 <- rep(0,5)
+
+for(i in 1:length(cv_values)){
+  # split data
+  inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+  tr_df <- clean_bank[inds,]
+  te_df <- clean_bank[-inds,]
+  # resample data
+  resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+  
+  #build decision tree
+  r_f <-  randomForest(y~., data = resampled_tr, mtry = 4, importance =TRUE)
+  
+  preds <- predict(r_f, newdata = te_df, type = "class")
+  
+  accuracy <-  round(sum(preds == te_df$y)/nrow(te_df),4)
+  
+  f1_score <- round(F1_Score(y_pred = preds, y_true = te_df$y),4)
+  cv_values[i] <- accuracy
+  cv_f1[i] <- f1_score
+}
+
+cv_values
+cv_f1
+```
+
+```{r}
+# save the cv_values and cv_f1 result of random forest
+saveRDS(cv_values, file = here("inputs/rds_store/cv_randomforest_acc.rds"))
+saveRDS(cv_f1, file = here("inputs/rds_store/cv_randomforest_f1.rds"))
+```
+
+```{r}
+cv_rf_acc <- readRDS(here("inputs/rds_store/cv_randomforest_acc.rds"))
+cv_rf_acc
+```
+
+### Plot the feature importance plot
+
+This is a fundamental outcome of the random forest and it shows, for each variable, how important it is in classifying the data. The Mean Decrease Accuracy plot expresses how much accuracy the model losses by excluding each variable. The more the accuracy suffers, the more important the variable is for the successful classification. The variables are presented from descending importance. The mean decrease in Gini coefficient is a measure of how each variable contributes to the homogeneity of the nodes and leaves in the resulting random forest. The higher the value of mean decrease accuracy or mean decrease Gini score, the higher the importance of the variable in the model.
+
+
+
+```{r}
+imp$varnames
+```
+
+
+```{r}
+# save the object for ggplot visualization
+# reference: https://stackoverflow.com/questions/52200095/how-to-customize-the-importance-plot-generated-by-package-randomforest/52200505
+imp <- varImpPlot(r_f1, n.var= 18)
+imp <- as.data.frame(imp)
+imp$varnames <- rownames(imp)
+rownames(imp) <- NULL
+imp$var_categ <- c("Client Data","Client Data","Client Data","Client Data","Client Data","Client Data","Client Data","Last Contact","Last Contact","Last Contact","Current & Previous Campaign","Current & Previous Campaign","Social & Economic Attribute","Social & Economic Attribute","Social & Economic Attribute","Social & Economic Attribute","Social & Economic Attribute","Current & Previous Campaign")
+```
+```{r}
+imp
+```
+
+
+```{r}
+# no use since color not obvious
+ggplot(imp, aes(x=reorder(varnames, MeanDecreaseGini), y=MeanDecreaseGini, color=as.factor(var_categ))) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=MeanDecreaseGini)) +
+  scale_color_discrete(name="Feature Category") +
+  theme_minimal()+
+  ggtitle("Feature Importance by Mean Decrease in Gini Coefficient")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  ylab("Mean Decrease Gini") +
+  xlab("Feature Name") +
+  coord_flip()
+```
+
+```{r}
+#use
+ggplot(imp, aes(x=reorder(varnames, MeanDecreaseGini), weight=MeanDecreaseGini, fill=as.factor(var_categ))) + 
+  geom_bar(alpha = 0.7, width = 0.6) +
+  scale_fill_discrete(name="Feature Category") +
+  theme_minimal()+
+  ggtitle("Feature Importance by Mean Decrease in Gini Coefficient")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  ylab("Mean Decrease Gini") +
+  xlab("Feature Name") +
+  coord_flip()
+```
+
+```{r}
+#use
+ggplot(imp, aes(x=reorder(varnames, MeanDecreaseAccuracy), weight=MeanDecreaseAccuracy, fill=as.factor(var_categ))) + 
+  geom_bar(alpha = 0.7, width = 0.6) +
+  scale_fill_discrete(name="Feature Category") +
+  theme_minimal()+
+  ggtitle("Feature Importance by Mean Decrease in Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  ylab("Mean Decrease Accuracy") +
+  xlab("Feature Name") +
+  coord_flip()
+```
+
+
+
+## Gradient Boosted Tree
+
+### Hyperparameter tuning
+
+```{r}
+# change y into numeric since gbm package require the response to be in {0,1}
+gbm_bank <- clean_bank
+gbm_bank$y <- ifelse(gbm_bank$y =="no",0,1)
+```
+
+```{r}
+#define vector
+numTrees = c(100,250,500)
+numDepth = c(1,5,10,15)
+numShrinkage = c(0.001,0.005,0.01,0.02)
+```
+
+```{r}
+# create dataframe that contains all vector combination
+parameter_df = expand.grid(numTrees = numTrees, numDepth = numDepth, numShrinkage = numShrinkage)
+parameter_df
+```
+
+```{r, message=FALSE, eval=FALSE}
+# Obtain a robust estimate of accuracy and f1 score using 5-fold cross-validation
+# this code chunk took around 36 hours to finish executing
+set.seed(2167)
+
+cv_test_acc <- rep(0,nrow(parameter_df))
+cv_test_f1 <- rep(0,nrow(parameter_df))
+
+for (i in 1:nrow(parameter_df)){
+  # track the iteration
+  if(i%%10 == 0){
+    print(i)
+  }
+  
+  # assign the parameter value combination for building the tree
+  num_tree = parameter_df[i,1]
+  num_depth = parameter_df[i,2]
+  shrink = parameter_df[i,3]
+  
+  # nested loop for 5 fold cv
+  cv_values <- rep(0,5)
+  cv_f1 <- rep(0,5)
+  
+  for(j in 1:length(cv_values)){
+    # split data
+    inds <- sample(1:nrow(gbm_bank), 0.80*nrow(gbm_bank))
+    tr_df <- gbm_bank[inds,]
+    te_df <- gbm_bank[-inds,]
+    te_df$y <- ifelse(te_df$y == 0,"no","yes")
+    
+    #resample data
+    resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+    
+    # build gradient boosted tree based on the the specific parameter combination
+    gradient_boost <- gbm(y~., data = resampled_tr, distribution = "bernoulli", 
+                          n.trees = num_tree, interaction.depth = num_depth, shrinkage = shrink)
+    preds <- predict(gradient_boost, newdata = te_df, type = "response")
+    
+    predict_binary <- ifelse(preds < 0.5, "no", "yes")
+    
+    # evaluation metrics 
+    accuracy <-  round(sum(predict_binary == te_df$y)/nrow(te_df),4)
+    f1_score <- round(F1_Score(y_pred = predict_binary, y_true = te_df$y),4)
+    
+    #rmse <- sqrt(mean((te_df$Salary - preds)^2))
+    cv_values[j] <- accuracy
+    cv_f1[j] <- f1_score
+  }
+  cv_test_acc[i] <- mean(cv_values)
+  cv_test_f1[i] <- mean(cv_f1)
+}
+```
+
+
+```{r}
+# save the cv_test_acc and cv_test_f1 result of gradient boosted tree
+saveRDS(cv_test_acc, file = here("inputs/rds_store/cv_gbtree_acc.rds"))
+saveRDS(cv_test_f1, file = here("inputs/rds_store/cv_gbtree_f1.rds"))
+```
+
+```{r}
+cv_test_acc
+```
+```{r}
+cv_test_f1
+cv_gbm_f1
+```
+
+
+```{r}
+cv_gbm_acc <- readRDS(here("inputs/rds_store/cv_gbtree_acc.rds"))
+cv_gbm_f1 <- readRDS(here("inputs/rds_store/cv_gbtree_f1.rds"))
+```
+
+```{r}
+# Append the test-set RMSE result into the parameter combination dataframe
+parameter_df$TestSetACC <- cv_gbm_acc
+parameter_df$TestSetF1 <- cv_gbm_f1
+head(parameter_df)
+```
+
+```{r}
+# find the optimal hyperparameter based on highest f1 score
+parameter_df %>% filter(TestSetF1 == max(TestSetF1))
+```
+
+Build the tree based on the best optimized hyperparameters
+
+
+```{r, warning=FALSE, message=FALSE}
+# Random split
+# n.tree = 250, interaction.depth = 1, shrinkage = 0.001
+set.seed(2167)
+
+inds <- sample(1:nrow(gbm_bank), 0.80*nrow(gbm_bank))
+tr_df <- gbm_bank[inds,]
+te_df <- gbm_bank[-inds,]
+te_df$y <- ifelse(te_df$y == 0,"no","yes")
+
+# resample the training set 
+resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+
+# build gradient boosted decision tree
+gradient_boost <-  gbm(y~., data = resampled_tr, distribution = "bernoulli", 
+                       n.trees = 250, interaction.depth = 1, shrinkage = 0.001)
+
+preds <- predict(gradient_boost, newdata = te_df, type = "response")
+
+predict_binary <- ifelse(preds < 0.5, "no", "yes")
+
+accuracy <-  round(sum(predict_binary == te_df$y)/nrow(te_df),4)  
+accuracy
+#accuracy <-  round(sum(preds == te_df$y)/nrow(te_df),4)  
+
+#accuracy
+```
+
+```{r}
+F1_Score(y_true = te_df$y, y_pred = predict_binary)
+```
+### confusion matrix
+
+```{r, warning=FALSE}
+basic_table <- table(prediction = predict_binary, target = te_df$y)
+cfmatrix <- as_tibble(basic_table)
+plot_confusion_matrix(cfmatrix, target_col = "target", prediction_col = "prediction", counts_col = "n",
+                      add_col_percentages = FALSE, add_row_percentages = FALSE, counts_on_top = TRUE, darkness = 0.9)
+```
+
+```{r, message=FALSE,warning=FALSE}
+# Obtain a robust estimate of the test-set accuracy using 5-fold cross-validation
+set.seed(2167)
+cv_values <- rep(0,5)
+cv_f1 <- rep(0,5)
+
+for(i in 1:length(cv_values)){
+  # split data
+  inds <- sample(1:nrow(gbm_bank), 0.80*nrow(gbm_bank))
+  tr_df <- gbm_bank[inds,]
+  te_df <- gbm_bank[-inds,]
+  te_df$y <- ifelse(te_df$y == 0,"no","yes")
+  
+  # resample data
+  resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+  
+  #build decision tree
+  gradient_boost <-  gbm(y~., data = resampled_tr, distribution = "bernoulli", 
+                         n.trees = 250, interaction.depth = 1, shrinkage = 0.001)
+  
+  preds <- predict(gradient_boost, newdata = te_df, type = "response")
+  
+  predict_binary <- ifelse(preds < 0.5, "no", "yes")
+  
+  accuracy <-  round(sum(predict_binary == te_df$y)/nrow(te_df),4)
+  
+  f1_score <- round(F1_Score(y_pred = predict_binary, y_true = te_df$y),4)
+  cv_values[i] <- accuracy
+  cv_f1[i] <- f1_score
+}
+
+cv_values
+cv_f1
+```
+
+```{r mlsummary, fig.cap='Summary of ML Model Evaluation Metrics', echo = FALSE}
+tibble(
+  "Algorithm" = c("Logistic Regression","Naive Bayes","Decision Tree","Random Forest", "Gradient Boosted Tree"),
+  "Accuracy" = c("82.4%","76.3%","83.5%","86.7%","86.5%"),
+  "F1 Score" = c("0.895","0.852","0.903","0.924","0.923"),
+  "False Negatives" = c("348","283","369","437","506"),
+  "FN Rate" = c("36.5%","29.7%","38.7%","45.9%","53.1%")
+) %>%
+  kable(caption = "Summary of ML Model Evaluation Metrics",
+        align = "lcccc") %>% 
+  kable_classic(full_width = F, html_font = "Cambria") %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  column_spec(1,bold=T) %>% 
+  row_spec(0, bold = T)
+  #%>% 
+  #column_spec(4, width = "6cm")
+```
+
+
+
+
+
+
+
+
+
+

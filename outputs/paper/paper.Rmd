@@ -1,15 +1,19 @@
 ---
-title: "Bank Marketing"
-subtitle: "My subtitle if needed"
-author: 
-  - First author
-  - Another author
-thanks: "Code and data are available at: LINK."
-date: "`r format(Sys.time(), '%d %B %Y')`"
-abstract: "First sentence. Second sentence. Third sentence. Fourth sentence."
+title: "Term Deposit Subscription: A Machine Learning Approach"
+author: "Hong Shi"
+date: "December 10 2021"
 output:
-  bookdown::pdf_document2
+  bookdown::pdf_document2:
+    latex_engine: xelatex
 toc: FALSE
+
+header-includes:
+- \usepackage{float}
+- \floatplacement{figure}{H}
+- \floatplacement{table}{H}
+
+always_allow_html: yes
+
 bibliography: references.bib
 ---
 
@@ -17,86 +21,1032 @@ bibliography: references.bib
 knitr::opts_chunk$set(echo = TRUE)
 
 library(tidyverse)
-library(palmerpenguins)
+library(here)
+library(stargazer)
+library(kableExtra)
+library(finalfit)
+library(broom)
+library(modelsummary)
+library(cvms)
+#install.packages("ROSE")
+library(ROSE)
+library(MLmetrics)
+library(scales)
+library(randomForest)
+library(rpart)
+library(rattle)
+library(gbm)
+#install.packages("naivebayes")
+library(naivebayes)
 ```
+
+
+
+```{r, include=FALSE}
+raw_bank <- read.csv(here("inputs/data/bank-additional-full.csv"), sep = ";")
+```
+
 
 # Introduction
 
-You can and should cross-reference sections and sub-sections. For instance, Section \@ref(data). R Markdown automatically makes the sections lower case and adds a dash to spaces to generate labels, for instance, Section \@ref(first-discussion-point). 
+&nbsp; &nbsp; A Term Deposit is a deposit that a bank or a financial institution offers at a fixed rate (often better than just opening a deposit account) and the money will be returned back at a specific maturity time. Since the money is locked during the term deposit, the bank is more flexible to invest the money in other financial products or lend the money to borrowers, yielding higher returns. Instead of simply opening deposit accounts, a bank would like to encourage their clients to subscribe for term deposits to increase its profitability.
+
+&nbsp; &nbsp; With increasing economic pressure, financial institutions are in high demand of accurately identifying their potential clients to maintain their profitabilities. This paper analyzes a term deposit marketing campaign of a Portuguese bank. Based on client personal data, deposit campaign information, and social and economics indicators, I first explore current patterns of term deposit subscription decision. And then I use five supervised Machine Learning models (Logistic Regression, Naive Bayes, Decision Tree, Random Forest, Gradient Boosted Tree) to predict client subscription decision. Even though Random Forest algorithm performs the best in terms of its classification accuracy, Naive Bayes algorithm outperforms other algorithms in terms of its ability to capture potential clients.
+
+&nbsp; &nbsp; The rest of this paper is organized as follows: In Data section (Section \@ref(Data)), I would introduce the Portuguese bank marketing dataset and preprocess the data. Next, in Exploratory Data Analysis section (Section \@ref(eda)), I use visualizations to explore current patterns of client subscription decision. In Machine Learning Model section (Section \@ref(mlmodel)), I first introduce methods of handling dataset imbalance, build machine learning models and then evaluate model performances. Finally, in Result and Discussion section (Section \@ref(randd)), I conclude and suggest future directions of this study.^[Codes and data are available at the GitHub repo: https://github.com/honn-ishinn/bank_marketing.]
+
+# Data {#Data}
+
+&nbsp; &nbsp; The data is about direct term deposit marketing campaigns of a Portuguese banking institution collected from May 2008 to November 2010. The data source is from Moro et al. [@citeMoro] and it is public available at UCI Machine Learning Repository. ^[Link of the dataset: https://archive.ics.uci.edu/ml/datasets/Bank+Marketing.] 
+
+&nbsp; &nbsp; The data is analyzed by R [@citeR], and its packages `tidyverse` [@citeTidyverse], `here` [@citeHere], `rattle` [@cite_rattle]. I used `bookdown` [@cite_bookdown] and `kableExtra` [@cite_kableextra] to format the document.
+
+
+## Dataset Description
+
+&nbsp; &nbsp; There are 41188 observations in the dataset with 20 features and 1 label column. These features belong to four major categories: (1) client personal data, (2) data related with last contact of current term deposit campaign, (3) data related with current and previous marketing campaigns, (4) data related with social and economics context indicators. Detailed description of dataset features is shown below (Table \@ref(tab:attributeinfo)):
+
+```{r attributeinfo, fig.cap='Attribute Information of Term Deposit Campaign Dataset', echo = FALSE}
+# Feature information from UCI Machine Learning Repository https://archive.ics.uci.edu/ml/datasets/Bank+Marketing#
+tibble(
+  " " = list("Client Data", "", "", "", "", "", "", "Related to Last Contact of Current Campaign", "", "", "", "Related to Current and Previous Campaign", "", "", "", "Social and Economoic Context Indicators", "", "", "", "", "Target Label"),
+  "Name" = list("age", "job", "marital", "education", "default", "housing", "loan", "contact", "month", "day_of_week", "duration", "campaign", "pdays", "previous", "poutcome", "emp.var.rate", "cons.price.idx", "cons.conf.idx", "euribor3m", "nr.employed", "y"),
+  "Datatype" = list("Numeric", "Categorical", "Categorical", "Categorical", "Categorical", "Categorical", "Categorical", "Categorical", "Categorical", "Categorical", "Numeric", "Numeric", "Numeric", "Numeric", "Categorical","Numeric","Numeric","Numeric","Numeric","Numeric", "Categorical"),
+  "Description" = list("Age", "Type of Job (admin, blue-collar, entrepreneur, housemaid, management, retired, self-employed, services, student, technician, unemployed, unknown)", "Marital status (divorced, married, single, unknown)", "Education level (basic.4y, basic.6y, basic.9y, high.school, illiterate, professional.course, university degree, unknown)", "Has credit in default? (no, yes, unknown)", "Has housing loan? (no, yes, unknown)", "Has personal loan? (no, yes, unknown)","Contact communication type (cellular, telephone)", "Last contact month of year (jan, feb, ... , nov, dec)", "Last contact day of week (mon, tue, wed, thu, fri)", "Last contact duration, in seconds", "Total contacts performed during current campaign with the client, including last contact", "Number of days after the client was last contacted from a previous campaign", "Number of contacts performed before current campaign with the client", "Outcome of previous campaign (failure, success, nonexistent)", "Quarterly indicator of employment variation rate", "Monthly indicator of consumer price index", "Monthly indicator of consumer confidence index", "Daily indicator of euribor 3 month rate", "Quarterly indicator of number of employees", "Has the client subscribed " ),
+) %>% 
+  kable(caption = "Feature Information of Term Deposit Campaign Dataset",
+        align = "cccc") %>% 
+  kable_classic(full_width = F, html_font = "Cambria") %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  column_spec(1,bold=T, width = "3cm") %>% 
+  row_spec(0, bold = T) %>% 
+  column_spec(4, width = "6cm")
+```
+
+## Data Preprocessing
+
+```{r, include=FALSE}
+raw_bank %>% group_by(pdays) %>% count() %>% filter(pdays == 999) %>% mutate(prop = n/nrow(raw_bank))
+```
+
+```{r, include=FALSE}
+raw_bank %>% group_by(previous) %>% count() %>% filter(previous != 0) %>% mutate(prop = n/nrow(raw_bank))
+```
+
+```{r,include=FALSE}
+cor.test(raw_bank$pdays, raw_bank$previous)
+```
+
+&nbsp; &nbsp; This dataset contains no missing value so handling missing value is not needed during data preprocessing. However, some features need to be dropped or recoded as follows: 
+
+&nbsp; &nbsp; *duration*: As suggested by Mora [@citeMoro], feature *duration* highly affects the target label *y* that a client will certainly not subscribe to the term deposit if that last contact duration is 0 second. Besides, the contact duration of a call is not known before a call is actually performed, and client subscription is not quickly available after the call. In this paper, I would like to build a realistic binary classification model for client subscription, so feature *duration* will be dropped in advance before further analysis.
+
+&nbsp; &nbsp; *pdays* and *previous*: Among 41188 observations, there are 39673 observations coded as 999 in *pdays* feature, meaning that around $96.3\%$ percent of clients are the first time to receive marketing campaign from this bank. And for those clients who received previous campaign, feature *previous* suggests that around $81.1\%$ clients have only received 1 contact before current campaign. Taking the somehow arbitrary numeric coding of *pdays* and existing high correlation between *pdays* and *previous* ^[Pearson Correlation is -0.59, the negative sign mainly ascribes to the arbitrary coding of 999 by feature pdays] into consideration, I decide to combine these two features into a new feature, namely *pcampaign*, in further analysis. *pcampaign* is a categorical variable that indicates whether the client received previous campaign or not (yes, no).
 
 
 
-# Data
+```{r, include=FALSE}
+clean_bank <- raw_bank
 
-Our data is of penguins (Figure \@ref(fig:bills)).
+# Drop duration feature
+clean_bank$duration <- NULL
 
-```{r bills, fig.cap="Bills of penguins", echo = FALSE}
-ggplot(penguins, aes(x = island, fill = species)) +
-  geom_bar(alpha = 0.8) +
-  scale_fill_manual(values = c("darkorange","purple","cyan4"),
-                    guide = FALSE) +
-  theme_minimal() +
-  facet_wrap(~species, ncol = 1) +
+# Combine pdays, previous into pcampaign feature
+clean_bank$pcampaign <- ifelse(clean_bank$pdays!= 999, "yes", "no")
+
+# Drop pdays, previous feature
+clean_bank$pdays <- NULL
+clean_bank$previous <- NULL
+```
+
+```{r, include=FALSE}
+# recode into factor
+clean_bank$job <- as.factor(clean_bank$job)
+clean_bank$marital <- as.factor(clean_bank$marital)
+clean_bank$education <- as.factor(clean_bank$education)
+clean_bank$default <- as.factor(clean_bank$default)
+clean_bank$housing <- as.factor(clean_bank$housing)
+clean_bank$loan <- as.factor(clean_bank$loan)
+clean_bank$contact <- as.factor(clean_bank$contact)
+clean_bank$month <- as.factor(clean_bank$month)
+clean_bank$day_of_week <- as.factor(clean_bank$day_of_week)
+clean_bank$poutcome <- as.factor(clean_bank$poutcome)
+clean_bank$pcampaign <- as.factor(clean_bank$pcampaign)
+clean_bank$y <- as.factor(clean_bank$y)
+#change y into binary variable
+#clean_bank$y <- ifelse(clean_bank$y == "no", 0, 1)
+```
+ 
+
+# Exploratory Data Analysis {#eda}
+
+&nbsp; &nbsp; After preprocessing the data, data visualizations are used to explore current patterns of client subscription decision based on different existing features. Features with relative significant subscription patterns are shown as follows, while other visualizations are attached in the Appendix (Appendix \@ref(otherplot)).
+
+## Client Data
+
+&nbsp; &nbsp; Either younger or elder clients are more likely to subscribe to term deposit, while middle-aged are less likely to subscribe to term deposit (Figure \@ref(fig:age)).
+
+```{r age, fig.align='center', fig.cap="Distribution of Term Deposit Subscription by Client Age", fig.width=7, fig.height=3.5, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank, aes(x = age, y = ..density..,color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5,binwidth = 4)+
+  theme_minimal()+
+  labs(title = "Distribution of Term Deposit Subscription by Client Age",
+       x = "Age",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+&nbsp; &nbsp; Clients who are student and retired people are more likely to subscribe to term deposit, while clients who are blue-collar and services people are less likely to subscribe to term deposit (Figure \@ref(fig:job)).
+
+```{r job, fig.align='center', fig.cap="Term Deposit Subscription by Client Job", fig.width= 7, fig.height=5, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x =job,color = y, fill = y),position = "fill",alpha =0.7, width = 0.5)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Client Job",
+       x = "Type of Job",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
   coord_flip()
 ```
 
-Talk more about it.
 
-Also bills and their average (Figure \@ref(fig:billssssss)). (Notice how you can change the height and width so they don't take the whole page?)
+&nbsp; &nbsp; Illiterate clients are more likely to subscribe to term deposit (Figure \@ref(fig:edu)).
 
-```{r billssssss, fig.cap="More bills of penguins", echo = FALSE, fig.width=8, fig.height=4}
-
-# This needs to be about the random data tha tI sasmpled?
-ggplot(penguins, aes(x = island, fill = species)) +
-  geom_bar(alpha = 0.8) +
-  scale_fill_manual(values = c("darkorange","purple","cyan4"),
-                    guide = FALSE) +
-  theme_minimal() +
-  facet_wrap(~species, ncol = 1) +
+```{r edu, fig.align='center', fig.cap="Term Deposit Subscription by Education Level", fig.width= 7, fig.height=3.5, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x =education,color = y, fill = y),position = "fill",alpha =0.7, width = 0.5)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Education Level",
+       x = "Level of Education",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
   coord_flip()
 ```
 
-Talk way more about it. 
+
+## Related to Last Contact of Current Campaign
+
+&nbsp; &nbsp; Clients last contacted through cellular devices are more likely to subscribe to term deposit (Figure \@ref(fig:contact)).
+
+```{r contact, fig.align='center', fig.cap="Term Deposit Subscription by Last Contact Type", fig.width= 5, fig.height=2, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = contact,color = y, fill = y),position = "fill",alpha =0.7, width = 0.4)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Last Contact Type",
+       x = "Contact Type",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+&nbsp; &nbsp; No contacts are performed in January and February. Many last campaign contacts are from April to August, especially in May, while they do not lead to a high subscription rate. By contrast, there are less last campaign contacts within March, September, October and December, while these last contacts lead to high subscription rates. (Figure \@ref(fig:month)).
+
+```{r month, fig.align='center', fig.cap="Term Deposit Subscription by Last Contact Month", fig.width= 7, fig.height=3.5, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = month,color = y, fill = y),position = "dodge",alpha =0.7)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Last Contact Month",
+       x = "Last Contact Month",
+       y = "Frequency Count")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_x_discrete(limits = c("jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"))  
+```
+
+
+## Related to Current and Previous Campaign
+
+&nbsp; &nbsp; Clients who are more previously contacted by other campaigns of this bank are more likely to subscribe to term deposit (Figure \@ref(fig:pcampaign)). For clients who received previous campaigns, clients accepted previous campaign are more likely to subscribe to term deposit (Figure \@ref(fig:poutcome))
+
+```{r pcampaign, fig.align='center', fig.cap="Term Deposit Subscription by Previous Campaign", fig.width= 5.5, fig.height=3, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = pcampaign,color = y, fill = y),position = "fill",alpha =0.7,width = 0.4)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Previous Campaign",
+       x = "Whether Received Previous Campaign",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+
+```{r, include= FALSE}
+had_campaign <- clean_bank %>% filter(pcampaign == "yes")
+```
+
+```{r poutcome, fig.align='center', fig.cap="Term Deposit Subscription by Previous Campaign", fig.width= 6, fig.height=2.75, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = had_campaign)+
+  geom_bar(aes(x = poutcome,color = y, fill = y),position = "dodge",alpha =0.7, width = 0.5)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Previous Campaign Outcome",
+       x = "Previous Outcome",
+       y = "Frequency Count",
+       caption = "*Only for Clients who Received Previous Marketing Campaign")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+
+## Social and Economic Context Indicators
+
+&nbsp; &nbsp; Clients are less likely to subscribe to term deposit when employment variation rate^[Refers to cyclical employment variation to indicate how many people are being hired or fired due to shifts in economy conditions] is positive, and more likely to subscribe to term deposit when employment variation rate is negative (Figure \@ref(fig:empvar)).  
+
+```{r empvar, fig.align='center', fig.cap="Term Deposit Subscription by Previous Campaign", fig.width= 6, fig.height=3, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank, aes(x = emp.var.rate, y = ..density..,color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5, binwidth = 0.2)+
+  theme_minimal()+
+  labs(title = "Distribution of Subscription by Employment Variation Rate",
+       x = "Employment Variation Rate (Quarterly)",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+&nbsp; &nbsp; Clients are less likely to subscribe to term deposit when Euribor 3 month rate^[Refers to Euro Interbank Offer Rate, a reference rate that is constructed from the average interest rate at which eurozone banks offer unsecured short-term lending on the inter-bank market] is relatively high, and more likely to subscribe to term deposit when Euribor 3 month rate is low (Figure \@ref(fig:euribor)).  
+
+```{r euribor, fig.align='center', fig.cap="Term Deposit Subscription by Previous Campaign", fig.width= 6, fig.height=3, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank, aes(x = euribor3m,y = ..density..,color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5, binwidth = 0.25)+
+  theme_minimal()+
+  labs(title = "Distribution of Subscription by Euribor 3 Month Rate",
+       x = "Euribor 3 Month Rate (Daily)",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+&nbsp; &nbsp; Clients are less likely to subscribe to term deposit when number of employees^[The dataset unfortunately does not specify unit of number of employees (e.g., in thousands)] are relatively high, and more likely to subscribe to term deposit when number of employees are low (Figure \@ref(fig:empnum)). 
+
+```{r empnum, fig.align='center', fig.cap="Term Deposit Subscription by Previous Campaign", fig.width= 6, fig.height=3, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank, aes(x = nr.employed,y = ..density..,color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5, binwidth = 20)+
+  theme_minimal()+
+  labs(title = "Distribution of Subscription by Number of Employees",
+       x = "Number of Employees (Quarterly)",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+\newpage
+
+# Machine Learning Model {#mlmodel}
+
+&nbsp; &nbsp; As the bank marketing campaign outcome for a client is to either subscribe the term deposit or not, it is a binary response. Therefore, binary classification algorithms should be used to predict client subscription decision.
+
+&nbsp; &nbsp; Five binary classification algorithms are used to build the client subscription prediction models: Logistic Regression, Naive Bayes, Decision Tree, Random Forest and Gradient Boosted Tree.  
+
+&nbsp; &nbsp; Package `naivebayes` [@cite_nb], `rpart` [@cite_rpart], `randomForest` [@cite_randomforest], `gbm` [@cite_gbm] are used to build these models. Models are evaluated by `cvms` [@cite_cvms] and `MLmetrics` [@cite_mlmetrics] to return classification accuracy, F1 score^[Harmonic mean of precision and recall, which precision is (True Positive)/(True Positive + False Positive) and recall is (True Positives)/(True Positive + False Negative)] and confusion matrix.
+
+## Resample Imbalance Data {#resample}
+
+&nbsp; &nbsp; In this dataset, client subscription decisions vary that around $88.7\%$ clients do not subscribe to term deposit while only around $11.3%$ clients subscribed (Table \@ref(tab:imbalance)). The imbalance nature of this dataset could cause significant drawback on classifier performance [@sun2009classification]. 
+
+&nbsp; &nbsp; To solve or at least mitigate the imbalance data issue, I use package `ROSE` [@cite_ROSE] to resample the training data. `ROSE` (Random Over-Sampling Examples) is a bootstrap-based technique to balance the rare class. After randomly splitting the data into $80\%$/$20\%$ training/testing set (32950 vs 8238 observations), I randomly over-sample the minority class `yes` and under-sample the majority class `no`. The training set is then resampled to 50000 observations that the ratio of class `yes` and class `no` is around 1:1 (25000 vs 25000 observations). And then I run binary classification algorithms on resampled training set and examine model performances through original testing set of the random split.
+
+```{r imbalance, fig.cap='Term Deposit Campaign Outcome', echo = FALSE}
+# for ML imbalance data part
+clean_bank %>% group_by(y) %>% count() %>% mutate(Proportion = paste0(round(n/nrow(clean_bank)*100, 2),"%")) %>% 
+  kable(caption = "Term Deposit Campaign Outcome",
+        align = "cc", col.names = c("Subscription Decision", "Count", "Proportion")) %>% 
+  kable_classic(full_width = F, html_font = "Cambria") %>% 
+  kable_styling(latex_options = "HOLD_position")
+```
+
+## Logistic Regression
+
+&nbsp; &nbsp; Logistic Regression uses a logistic function to model a binary class and it is widely used in binary classification algorithm. 
+
+&nbsp; &nbsp; Following the resample procedure as suggested in Section \@ref(resample), logistic regression yields the classification accuracy of $82.4\%$ and the F1 score of $0.895$. By using 5-fold Cross Validation, the robust estimates on testing set are $82.9\%$ for accuracy and 0.899 for F1 score. The close measures between the model and its robust estimates suggest a valid model.
+
+```{r, include = FALSE,warning=FALSE}
+# Random split
+set.seed(2167)
+
+inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+tr_df <- clean_bank[inds,]
+te_df <- clean_bank[-inds,]
+
+# over sample the training set 
+resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+
+#build logistic regression
+logistic_regression <- glm(y~., data = resampled_tr, family = binomial)
+  
+preds <- predict(logistic_regression, newdata = te_df, type = "response")
+
+predict_binary1 <- ifelse(preds < 0.5, "no", "yes")
+
+accuracy <-  round(sum(predict_binary1 == te_df$y)/nrow(te_df),4)  
+accuracy
+F1_Score(y_pred = predict_binary1, y_true = te_df$y)
+```
+
+```{r, include=FALSE,warning=FALSE}
+# Obtain a robust estimate of the test-set accuracy using 5-fold cross-validation
+set.seed(2167)
+cv_values <- rep(0,5)
+cv_f1 <- rep(0,5)
+
+for(i in 1:length(cv_values)){
+  # split data
+  inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+  tr_df <- clean_bank[inds,]
+  te_df <- clean_bank[-inds,]
+  resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+  
+  #build logistic regression
+  logistic_regression <- glm(y~., data = resampled_tr, family = binomial)
+  
+  preds <- predict(logistic_regression, newdata = te_df, type = "response")
+  predict_binary <- ifelse(preds < 0.5, "no", "yes")
+  accuracy <-  round(sum(predict_binary == te_df$y)/nrow(te_df),4)  
+  
+  f1_score <- round(F1_Score(y_pred = predict_binary, y_true = te_df$y),4)
+  cv_values[i] <- accuracy
+  cv_f1[i] <- f1_score
+}
+
+cv_values
+cv_f1
+```
+
+```{r, include=FALSE}
+mean(cv_values)
+mean(cv_f1)
+```
+
+&nbsp; &nbsp; The confusion matrix of logistic regression (Figure \@ref(fig:logcm)) shows that the model yields 348 False Negatives, suggesting that 348 clients who actually subscribed to the term deposit campaign are incorrectly predicted not to subscribe to the term deposit. And the false negative rate^[Also refers to miss rate, which is (False Negative)/(False Negative + True Positive)] of the logistic regression model is $36.5\%$.
+
+```{r logcm, fig.align='center', fig.cap="Confusion Matrix of Logistic Regression", fig.width= 2.75, fig.height=2.75, echo= FALSE, message=FALSE, warning=FALSE}
+basic_table <- table(prediction = predict_binary1, target = te_df$y)
+cfmatrix <- as_tibble(basic_table)
+plot_confusion_matrix(cfmatrix, target_col = "target", prediction_col = "prediction", counts_col = "n",
+                      add_col_percentages = FALSE, add_row_percentages = FALSE, counts_on_top = TRUE, darkness = 0.9)
+```
+```{r, include=FALSE}
+# FN rate
+round(348/(348+605),3)
+```
+
+## Naive Bayes
+
+&nbsp; &nbsp; Naive Bayes is a probabilistic classifier based on Bayes theorem and kernel density estimation could be applied on Bayesian models to achieve better performance [@perez2009bayesian].
+
+&nbsp; &nbsp; Following the resample procedure as suggested in Section \@ref(resample), Naive Bayes classifier using kernel density yields the classification accuracy of $76.3\%$ and the F1 score of $0.852$. By using 5-fold Cross Validation, the robust estimates on testing set are $77.9\%$ for accuracy and 0.864 for F1 score. The close measures between the model and its robust estimates suggest a valid model.
+
+```{r, include=FALSE, warning=FALSE}
+# https://towardsdatascience.com/laplace-smoothing-in-na%C3%AFve-bayes-algorithm-9c237a8bdece
+# Random split
+set.seed(2167)
+
+inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+tr_df <- clean_bank[inds,]
+te_df <- clean_bank[-inds,]
+
+# resample the training set 
+resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+
+#build naive bayes
+n_b <- naive_bayes(y~., usekernel = TRUE,data = resampled_tr)
+  
+preds <- predict(n_b, newdata = te_df, type = "class")
+
+accuracy <-  round(sum(preds == te_df$y)/nrow(te_df),4)  
+
+accuracy
+F1_Score(y_pred = preds, y_true = te_df$y)
+```
+
+&nbsp; &nbsp; The confusion matrix of Naive Bayes (Figure \@ref(fig:nbcm)) shows that the model yields 283 False Negatives, suggesting that 283 clients who actually subscribed to the term deposit campaign are incorrectly predicted not to subscribe to the term deposit. And the false negative rate of the Naive Bayes model is $29.7\%$.
+
+```{r nbcm, fig.align='center', fig.cap="Confusion Matrix of Naive Bayes", fig.width= 2.75, fig.height=2.75, echo= FALSE, message=FALSE, warning=FALSE}
+basic_table <- table(prediction = preds, target = te_df$y)
+cfmatrix <- as_tibble(basic_table)
+plot_confusion_matrix(cfmatrix, target_col = "target", prediction_col = "prediction", counts_col = "n",
+                      add_col_percentages = FALSE, add_row_percentages = FALSE, counts_on_top = TRUE, darkness = 0.9)
+```
+
+```{r, include=FALSE}
+283/(670+283)
+```
+
+
+```{r, include=FALSE, warning=FALSE}
+# Obtain a robust estimate of the test-set accuracy using 5-fold cross-validation
+set.seed(2167)
+cv_values <- rep(0,5)
+cv_f1 <- rep(0,5)
+
+for(i in 1:length(cv_values)){
+  # split data
+  inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+  tr_df <- clean_bank[inds,]
+  te_df <- clean_bank[-inds,]
+  # resample data
+  resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+  
+  #build naive bayes
+  n_b <- naive_bayes(y~.,usekernel = TRUE ,data = resampled_tr)
+  
+  preds <- predict(n_b, newdata = te_df, type = "class")
+  
+  accuracy <-  round(sum(preds == te_df$y)/nrow(te_df),4)
+  
+  f1_score <- round(F1_Score(y_pred = preds, y_true = te_df$y),4)
+  cv_values[i] <- accuracy
+  cv_f1[i] <- f1_score
+}
+
+cv_values
+cv_f1
+```
+
+```{r, include=FALSE}
+mean(cv_values)
+mean(cv_f1)
+```
+
+## Decision Tree
+
+&nbsp; &nbsp; Decision Tree is a non-parametric classifier that uses greedy recursive binary splitting to predict the class label. Due to the greedy modeling approach, the decision tree could grow large and redundant, while a large decision tree could be pruned through cost complexity pruning that optimizes the tree complexity and classification accuracy. 
+
+&nbsp; &nbsp; Following the resample procedure as suggested in Section \@ref(resample), the pruned decision tree yields the classification accuracy of $83.5\%$ and the F1 score of $0.903$. By using 5-fold Cross Validation, the robust estimates on testing set are $83.54\%$ for accuracy and 0.903 for F1 score. The close measures between the model and its robust estimates suggest a valid model.
+
+```{r, include=FALSE,warning=FALSE}
+# Random split
+set.seed(2167)
+
+inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+tr_df <- clean_bank[inds,]
+te_df <- clean_bank[-inds,]
+
+# resample the training set 
+resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+
+# build decision tree
+decision_tree1 <- rpart(y~., data = resampled_tr)
+  
+preds <- predict(decision_tree1, newdata = te_df, type = "class")
+
+#predict_binary <- ifelse(preds < 0.5, "no", "yes")
+
+#accuracy <-  round(sum(predict_binary == te_df$y)/nrow(te_df),4)  
+#accuracy
+accuracy <-  round(sum(preds == te_df$y)/nrow(te_df),4)  
+
+accuracy
+```
+
+```{r, include=FALSE}
+# F1 score
+F1_Score(y_pred = preds, y_true = te_df$y)
+```
+
+&nbsp; &nbsp; The nature of recursive binary splitting provides interpretability of decision tree model. The following pruned decision tree plot (Figure \@ref(fig:dtplot)) suggests that if the quarterly indicator of number of employees is greater or equal to 5088, and the last campaign contact is in May, June, July, August, November or December, the client will be predicted not to subscribe to the term deposit. If the quarterly indicator of number of employees is less than 5088, the client will be predicted to subscribe to the term deposit.
+
+```{r dtplot, fig.align='center', fig.cap="Tree Plot of Decision Tree", fig.width= 5, fig.height= 3.75, echo= FALSE, message=FALSE, warning=FALSE}
+fancyRpartPlot(decision_tree1, yesno = 2, caption = "")
+```
+
+&nbsp; &nbsp; The confusion matrix of Decision Tree (Figure \@ref(fig:dtcm)) shows that the model yields 369 False Negatives, suggesting that 369 clients who actually subscribed to the term deposit campaign are incorrectly predicted not to subscribe to the term deposit. And the false negative rate of the Decision Tree model is $38.7\%$.
+
+```{r dtcm, fig.align='center', fig.cap="Confusion Matrix of Decision Tree", fig.width= 2.75, fig.height=2.75, echo= FALSE, message=FALSE, warning=FALSE}
+basic_table <- table(prediction = preds, target = te_df$y)
+cfmatrix <- as_tibble(basic_table)
+plot_confusion_matrix(cfmatrix, target_col = "target", prediction_col = "prediction", counts_col = "n",
+                      add_col_percentages = FALSE, add_row_percentages = FALSE, counts_on_top = TRUE, darkness = 0.9)
+```
+
+```{r, include=FALSE}
+# FN rate
+369/(584+369)
+```
+
+```{r, include = FALSE,warning=FALSE}
+# Obtain a robust estimate of the test-set accuracy using 5-fold cross-validation
+set.seed(2167)
+cv_values <- rep(0,5)
+cv_f1 <- rep(0,5)
+
+for(i in 1:length(cv_values)){
+  # split data
+  inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+  tr_df <- clean_bank[inds,]
+  te_df <- clean_bank[-inds,]
+  # resample data
+  resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+  
+  #build decision tree
+  decision_tree <- rpart(y~., data = resampled_tr)
+  
+  preds <- predict(decision_tree, newdata = te_df, type = "class")
+  
+  accuracy <-  round(sum(preds == te_df$y)/nrow(te_df),4)
+  
+  f1_score <- round(F1_Score(y_pred = preds, y_true = te_df$y),4)
+  cv_values[i] <- accuracy
+  cv_f1[i] <- f1_score
+}
+
+cv_values
+cv_f1
+```
+
+```{r, include=FALSE}
+# 5-fold accuracy and f1 score of naive bayes
+mean(cv_values)
+mean(cv_f1)
+```
+
+### Random Forest
+
+&nbsp; &nbsp; Random Forest is a non-parametric classifier that construct a multitude of decision trees on bootstrapped training samples. When build such tree, a random sample of m features is chosen as split candidates from the full set of p features for each split in a tree that $m {\approx}\sqrt{p}$. After preprocessing, there are 18 features left in the marketing campaign dataset, so a random sample of $m=4$ feature will be chosen for each split. 
+
+&nbsp; &nbsp; Following the resample procedure as suggested in Section \@ref(resample), the random forest yields the classification accuracy of $86.7\%$ and the F1 score of $0.924$. By using 5-fold Cross Validation, the robust estimates on testing set are $86.5\%$ for accuracy and 0.923 for F1 score. The close measures between the model and its robust estimates suggest a valid model.
+
+```{r, include=FALSE}
+# features used except y
+num_feature <- ncol(clean_bank)-1
+# mtry value
+round(sqrt(num_feature),0)
+```
+
+```{r, include=FALSE,warning=FALSE}
+# Random split
+set.seed(2167)
+
+inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+tr_df <- clean_bank[inds,]
+te_df <- clean_bank[-inds,]
+
+# resample the training set 
+resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+
+# build decision tree
+r_f1 <-  randomForest(y~., data = resampled_tr, mtry = 4, importance =TRUE)
+  
+preds <- predict(r_f1, newdata = te_df, type = "class")
+
+#predict_binary <- ifelse(preds < 0.5, "no", "yes")
+
+#accuracy <-  round(sum(predict_binary == te_df$y)/nrow(te_df),4)  
+#accuracy
+accuracy <-  round(sum(preds == te_df$y)/nrow(te_df),4)  
+
+accuracy
+F1_Score(y_pred = preds, y_true = te_df$y)
+```
+
+&nbsp; &nbsp; The confusion matrix of Random Forest (Figure \@ref(fig:rfcm)) shows that the model yields 437 False Negatives, suggesting that 437 clients who actually subscribed to the term deposit campaign are incorrectly predicted not to subscribe to the term deposit. And the false negative rate of the Random Forest model is $45.9\%$.
+
+```{r rfcm, fig.align='center', fig.cap="Confusion Matrix of Random Forest", fig.width= 2.75, fig.height=2.75, echo= FALSE, message=FALSE, warning=FALSE}
+basic_table <- table(prediction = preds, target = te_df$y)
+cfmatrix <- as_tibble(basic_table)
+plot_confusion_matrix(cfmatrix, target_col = "target", prediction_col = "prediction", counts_col = "n",
+                      add_col_percentages = FALSE, add_row_percentages = FALSE, counts_on_top = TRUE, darkness = 0.9)
+```
+
+```{r, include=FALSE}
+437/(437+516)
+```
+
+&nbsp; &nbsp; The random forest model allows to identify how important a feature is in classifying the data. Mean Decrease Accuracy and Mean Decrease Gini Coefficient are commonly measures to examine feature importance [@han2016variable]. Mean Decrease Accuracy expresses how much accuracy the model losses by excluding such feature. Higher classification accuracy loss suggests higher feature importance. Mean Decrease Gini Coefficient expresses how each feature contributes to the homogeneity of nodes and leaves in resulting random forest. Higher Mean Decrease Gini Coefficient suggests higher feature importance. 
+
+&nbsp; &nbsp; According to the Mean Decrease Accuracy plot (Figure \@ref(fig:mdaimp)), Top 5 features that contribute most to this random forest model is *job*, *education*, *campaign*, *day_of_week* and *age*, which mainly belongs to client personal data. For Mean Decrease Gini plot (Figure \@ref(fig:mdgimp)), Top 5 features that contribute most to this random forest model is *euribor3m*, *age*, *job*, *nr.employed*, *education*, which mainly belongs to client personal data and social & economic indicators. 
+
+```{r, include=FALSE}
+# save the object for ggplot visualization
+# reference: https://stackoverflow.com/questions/52200095/how-to-customize-the-importance-plot-generated-by-package-randomforest/52200505
+imp <- varImpPlot(r_f1, n.var= 18)
+imp <- as.data.frame(imp)
+imp$varnames <- rownames(imp)
+rownames(imp) <- NULL
+imp$var_categ <- c("Client Data","Client Data","Client Data","Client Data","Client Data","Client Data","Client Data","Last Contact","Last Contact","Last Contact","Current & Previous Campaign","Current & Previous Campaign","Social & Economic Attribute","Social & Economic Attribute","Social & Economic Attribute","Social & Economic Attribute","Social & Economic Attribute","Current & Previous Campaign")
+```
+
+```{r mdaimp, fig.align='center', fig.cap="Feature Importance by Mean Decrease in Accuracy", fig.width= 7, fig.height=4, echo= FALSE, message=FALSE, warning=FALSE}
+#use
+ggplot(imp, aes(x=reorder(varnames, MeanDecreaseAccuracy), weight=MeanDecreaseAccuracy, fill=as.factor(var_categ))) + 
+  geom_bar(alpha = 0.7, width = 0.6) +
+  scale_fill_discrete(name="Feature Category") +
+  theme_minimal()+
+  ggtitle("Feature Importance by Mean Decrease in Accuracy")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  ylab("Mean Decrease Accuracy") +
+  xlab("Feature Name") +
+  coord_flip()
+```
+
+```{r mdgimp, fig.align='center', fig.cap="Feature Importance by Mean Decrease in Gini Coefficient", fig.width= 7, fig.height= 4, echo= FALSE, message=FALSE, warning=FALSE}
+#use
+ggplot(imp, aes(x=reorder(varnames, MeanDecreaseGini), weight=MeanDecreaseGini, fill=as.factor(var_categ))) + 
+  geom_bar(alpha = 0.7, width = 0.6) +
+  scale_fill_discrete(name="Feature Category") +
+  theme_minimal()+
+  ggtitle("Feature Importance by Mean Decrease in Gini Coefficient")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  ylab("Mean Decrease Gini") +
+  xlab("Feature Name") +
+  coord_flip()
+```
+
+```{r, message=FALSE,include=FALSE, eval=FALSE ,warning=FALSE}
+# Obtain a robust estimate of the test-set accuracy using 5-fold cross-validation
+set.seed(2167)
+cv_values <- rep(0,5)
+cv_f1 <- rep(0,5)
+
+for(i in 1:length(cv_values)){
+  # split data
+  inds <- sample(1:nrow(clean_bank), 0.80*nrow(clean_bank))
+  tr_df <- clean_bank[inds,]
+  te_df <- clean_bank[-inds,]
+  # resample data
+  resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+  
+  #build decision tree
+  r_f <-  randomForest(y~., data = resampled_tr, mtry = 4, importance =TRUE)
+  
+  preds <- predict(r_f, newdata = te_df, type = "class")
+  
+  accuracy <-  round(sum(preds == te_df$y)/nrow(te_df),4)
+  
+  f1_score <- round(F1_Score(y_pred = preds, y_true = te_df$y),4)
+  cv_values[i] <- accuracy
+  cv_f1[i] <- f1_score
+}
+
+cv_values
+cv_f1
+
+# save the cv_values and cv_f1 result of random forest
+saveRDS(cv_values, file = here("inputs/rds_store/cv_randomforest_acc.rds"))
+saveRDS(cv_f1, file = here("inputs/rds_store/cv_randomforest_f1.rds"))
+```
+
+```{r, include=FALSE}
+# 5-fold cv result
+cv_rf_acc <- readRDS(here("inputs/rds_store/cv_randomforest_acc.rds"))
+cv_rf_f1 <- readRDS(here("inputs/rds_store/cv_randomforest_f1.rds"))
+mean(cv_rf_acc)
+mean(cv_rf_f1)
+```
+
+## Gradient Boosted Tree
+
+&nbsp; &nbsp; Gradient Boosted Tree use is another non-parametric algorithm based on decision tree. Each tree fits on the original training data and the tree is grown sequentially using information of previously built trees. The model is then boosted by combining a large number of decision trees to improve its performance.
+
+&nbsp; &nbsp; The model performance of gradient boosted tree could be affected by following hyperparameters: (1) total number of *n* trees to fit, (2) interaction depth *d* that control level of interaction of features within the model and (3) shrinkage or learning rate $\lambda$ that control the tree expansion. Hyperparameter tuning using 5-fold Cross Validation is performed to find a robust hyperparameter combination^[n = 100,250,500 ; d = 1,5,10,15 ; $\lambda$ = 0.001, 0.002, 0.01, 0.02] that returns the best model performance on the dataset based on F1 score. The tuning result suggests that when $n = 250$, $d = 1$ and ${\lambda} = 0.001$, the model reaches its best performance on F1 score.
+
+&nbsp; &nbsp; Following the resample procedure as suggested in Section \@ref(resample), the random forest yields the classification accuracy of $87.4\%$ and the F1 score of $0.929$. By using 5-fold Cross Validation, the robust estimates on testing set are $87.3\%$ for accuracy and 0.928 for F1 score. The close measures between the model and its robust estimates suggest a valid model.
+
+```{r, include=FALSE}
+# change y into numeric since gbm package require the response to be in {0,1}
+gbm_bank <- clean_bank
+gbm_bank$y <- ifelse(gbm_bank$y =="no",0,1)
+#define vector
+numTrees = c(100,250,500)
+numDepth = c(1,5,10,15)
+numShrinkage = c(0.001,0.005,0.01,0.02)
+# create dataframe that contains all vector combination
+parameter_df = expand.grid(numTrees = numTrees, numDepth = numDepth, numShrinkage = numShrinkage)
+```
+
+```{r, include=FALSE, message=FALSE, eval=FALSE}
+# Obtain a robust estimate of accuracy and f1 score using 5-fold cross-validation
+# this code chunk took around 36 hours to finish executing
+set.seed(2167)
+
+cv_test_acc <- rep(0,nrow(parameter_df))
+cv_test_f1 <- rep(0,nrow(parameter_df))
+
+for (i in 1:nrow(parameter_df)){
+  # track the iteration
+  if(i%%10 == 0){
+    print(i)
+  }
+  
+  # assign the parameter value combination for building the tree
+  num_tree = parameter_df[i,1]
+  num_depth = parameter_df[i,2]
+  shrink = parameter_df[i,3]
+  
+  # nested loop for 5 fold cv
+  cv_values <- rep(0,5)
+  cv_f1 <- rep(0,5)
+  
+  for(j in 1:length(cv_values)){
+    # split data
+    inds <- sample(1:nrow(gbm_bank), 0.80*nrow(gbm_bank))
+    tr_df <- gbm_bank[inds,]
+    te_df <- gbm_bank[-inds,]
+    te_df$y <- ifelse(te_df$y == 0,"no","yes")
+    
+    #resample data
+    resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+    
+    # build gradient boosted tree based on the the specific parameter combination
+    gradient_boost <- gbm(y~., data = resampled_tr, distribution = "bernoulli", 
+                          n.trees = num_tree, interaction.depth = num_depth, shrinkage = shrink)
+    preds <- predict(gradient_boost, newdata = te_df, type = "response")
+    
+    predict_binary <- ifelse(preds < 0.5, "no", "yes")
+    
+    # evaluation metrics 
+    accuracy <-  round(sum(predict_binary == te_df$y)/nrow(te_df),4)
+    f1_score <- round(F1_Score(y_pred = predict_binary, y_true = te_df$y),4)
+    
+    #rmse <- sqrt(mean((te_df$Salary - preds)^2))
+    cv_values[j] <- accuracy
+    cv_f1[j] <- f1_score
+  }
+  cv_test_acc[i] <- mean(cv_values)
+  cv_test_f1[i] <- mean(cv_f1)
+}
+
+# save the cv_test_acc and cv_test_f1 result of gradient boosted tree
+saveRDS(cv_test_acc, file = here("inputs/rds_store/cv_gbtree_acc.rds"))
+saveRDS(cv_test_f1, file = here("inputs/rds_store/cv_gbtree_f1.rds"))
+```
+
+```{r, include=FALSE}
+# read the stored result
+cv_gbm_acc <- readRDS(here("inputs/rds_store/cv_gbtree_acc.rds"))
+cv_gbm_f1 <- readRDS(here("inputs/rds_store/cv_gbtree_f1.rds"))
+
+# Append the test-set RMSE result into the parameter combination dataframe
+parameter_df$TestSetACC <- cv_gbm_acc
+parameter_df$TestSetF1 <- cv_gbm_f1
+
+# find the optimal hyperparameter based on highest f1 score
+parameter_df %>% filter(TestSetF1 == max(TestSetF1))
+```
 
 
 
-# Model
+```{r, include=FALSE ,warning=FALSE, message=FALSE}
+# Random split
+# n.tree = 250, interaction.depth = 1, shrinkage = 0.001
+set.seed(2167)
 
-\begin{equation}
-Pr(\theta | y) = \frac{Pr(y | \theta) Pr(\theta)}{Pr(y)}  (\#eq:bayes)
-\end{equation}
+inds <- sample(1:nrow(gbm_bank), 0.80*nrow(gbm_bank))
+tr_df <- gbm_bank[inds,]
+te_df <- gbm_bank[-inds,]
+te_df$y <- ifelse(te_df$y == 0,"no","yes")
 
-Equation \@ref(eq:bayes) seems useful, eh?
+# resample the training set 
+resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
 
-Here's a dumb example of how to use some references: In paper we run our analysis in `R` [@citeR]. We also use the `tidyverse` which was written by @thereferencecanbewhatever If we were interested in baseball data then @citeLahman could be useful. 
+# build gradient boosted
+gradient_boost <-  gbm(y~., data = resampled_tr, distribution = "bernoulli", 
+                       n.trees = 250, interaction.depth = 1, shrinkage = 0.001)
 
-We can use maths by including latex between dollar signs, for instance $\theta$.
+preds <- predict(gradient_boost, newdata = te_df, type = "response")
+
+predict_binary <- ifelse(preds < 0.5, "no", "yes")
+
+accuracy <-  round(sum(predict_binary == te_df$y)/nrow(te_df),4)  
+accuracy
+F1_Score(y_true = te_df$y, y_pred = predict_binary)
+```
+
+&nbsp; &nbsp; The confusion matrix of Gradient Boosted Tree (Figure \@ref(fig:gbtcm)) shows that the model yields 506 False Negatives, suggesting that 506 clients who actually subscribed to the term deposit campaign are incorrectly predicted not to subscribe to the term deposit. And the false negative rate of the Gradient Boosted Tree model is $53.1\%$.
+
+```{r gbtcm, fig.align='center', fig.cap="Confusion Matrix of Gradient Boosted Tree", fig.width= 2.75, fig.height=2.75, echo= FALSE, message=FALSE, warning=FALSE}
+basic_table <- table(prediction = predict_binary, target = te_df$y)
+cfmatrix <- as_tibble(basic_table)
+plot_confusion_matrix(cfmatrix, target_col = "target", prediction_col = "prediction", counts_col = "n",
+                      add_col_percentages = FALSE, add_row_percentages = FALSE, counts_on_top = TRUE, darkness = 0.9)
+```
+
+```{r, include=FALSE}
+# FN rate
+506/(447+506)
+```
 
 
-# Results
+```{r, include=FALSE, eval = FALSE, message=FALSE,warning=FALSE}
+# Obtain a robust estimate of the test-set accuracy using 5-fold cross-validation
+set.seed(2167)
+cv_values <- rep(0,5)
+cv_f1 <- rep(0,5)
 
-# Discussion
+for(i in 1:length(cv_values)){
+  # split data
+  inds <- sample(1:nrow(gbm_bank), 0.80*nrow(gbm_bank))
+  tr_df <- gbm_bank[inds,]
+  te_df <- gbm_bank[-inds,]
+  te_df$y <- ifelse(te_df$y == 0,"no","yes")
+  
+  # resample data
+  resampled_tr <- ovun.sample(y~., data = tr_df, method = "both", p = 0.5, N = 50000, seed = 2167)$data
+  
+  #build gradient boosted tree
+  gradient_boost <-  gbm(y~., data = resampled_tr, distribution = "bernoulli", 
+                         n.trees = 250, interaction.depth = 1, shrinkage = 0.001)
+  
+  preds <- predict(gradient_boost, newdata = te_df, type = "response")
+  
+  predict_binary <- ifelse(preds < 0.5, "no", "yes")
+  
+  accuracy <-  round(sum(predict_binary == te_df$y)/nrow(te_df),4)
+  
+  f1_score <- round(F1_Score(y_pred = predict_binary, y_true = te_df$y),4)
+  cv_values[i] <- accuracy
+  cv_f1[i] <- f1_score
+}
 
-## First discussion point
+cv_values
+cv_f1
 
-If my paper were 10 pages, then should be be at least 2.5 pages. The discussion is a chance to show off what you know and what you learnt from all this. 
+# save the cv_values and cv_f1 result of the best parameter combination of gradient boosted tree
+saveRDS(cv_values, file = here("inputs/rds_store/cv_gbtree_best_acc.rds"))
+saveRDS(cv_f1, file = here("inputs/rds_store/cv_gbtree_best_f1.rds"))
+```
 
-## Second discussion point
 
-## Third discussion point
+```{r, include=FALSE}
+# read the stored result
+cv_best_acc <- readRDS(here("inputs/rds_store/cv_gbtree_best_acc.rds"))
+cv_best_f1 <- readRDS(here("inputs/rds_store/cv_gbtree_best_f1.rds"))
+```
 
-## Weaknesses and next steps
+```{r, include=FALSE}
+mean(cv_best_acc)
+mean(cv_best_f1)
+```
 
-Weaknesses and next steps should also be included.
+
+# Result and Discussion {#randd}
+
+## Model Evaluation
+
+&nbsp; &nbsp; The following table (Table \@ref(tab:mlsummary)) summarizes evaluation metrics of all previous models. Among these five algorithms, Random Forest has the highest classification accuracy of $86.7\%$ and F1 score of 0.924 so that it could be considered as a powerful model to predict client term deposit subscription decision. 
+
+```{r mlsummary, fig.cap='Summary of ML Model Evaluation Metrics', echo = FALSE}
+tibble(
+  "Algorithm" = c("Logistic Regression","Naive Bayes","Decision Tree","Random Forest", "Gradient Boosted Tree"),
+  "Accuracy" = c("82.4%","76.3%","83.5%","86.7%","86.5%"),
+  "F1 Score" = c("0.895","0.852","0.903","0.924","0.923"),
+  "False Negatives" = c("348","283","369","437","506"),
+  "FN Rate" = c("36.5%","29.7%","38.7%","45.9%","53.1%")
+) %>%
+  kable(caption = "Summary of ML Model Evaluation Metrics",
+        align = "lcccc") %>% 
+  kable_classic(full_width = F, html_font = "Cambria") %>% 
+  kable_styling(latex_options = "HOLD_position") %>% 
+  #column_spec(1,bold=T) %>% 
+  row_spec(0, bold = T)
+  #%>% 
+  #column_spec(4, width = "6cm")
+```
+
+&nbsp; &nbsp; However, if a bank wants to implement a realistic predictive model on subscription decision, a Random Forest model may not be a optimal choice. Notice that 437 false negatives of random forest indicate that 437 clients who actually subscribed to the term deposit campaign are incorrectly predicted not to subscribe to the term deposit. The bank might not run the marketing campaign on clients predicted not to be the primary marketing targets, although they do subscribe. Such missed targeting on potential clients could affect the profitability of the bank. Therefore, model with low false negatives and false negative rates shall be considered to capture more potentially valuable clients. In this situation, Naive Bayes outperforms other algorithms with its lowest false negatives of 283 and false negative rate of $29.7\%$.
+
+\newpage
+
+## Limitation
+
+&nbsp; &nbsp; During the analysis, I identified several limitations that may affect the evaluation result:
+
+1. Imbalance data: As mentioned in Section \@ref(resample), the imbalance nature of the data could affect the classification result. Resampling the training data may not be a perfect solution to this issue.
+
+2. Missing time series feature: Since the data is collected from May 2008 to November 2010, some deposit campaigns were run under 2008 financial crisis. Previous studies have suggested that financial crisis could affect the deposit decision [@han2013financial], while a time feature that records the actual time of contacting clients is missing from the dataset. Even though some social and economic indicator features in this dataset may reflect certain economic conditions, relationships between these indicators and economic conditions still requires careful examinations.
+
+## Discussion and Future Steps
+
+&nbsp; &nbsp; In conclusion, even though a relatively poor performance on classification accuracy, I would suggest using Naive Bayes as a predictive model to determine client subscriptions due to its ability to capture potential clients. And based on previous analysis result, the bank shall take several actions to improve their marketing campaign success rate:
+
+1. Adjust target demographics: According to exploratory data analysis (Figure \@ref(fig:age) and Figure \@ref(fig:job)) and feature importance plot of random forest (Figure \@ref(fig:mdaimp)), there are several client personal features such as age and type of job affecting the subscription rate of the term deposit. The bank may wisely target clients based on demographic information to increase the subscription rate and reduce the labor cost.
+
+2. Choose proper time to run campaigns: According to exploratory data analysis (Figure \@ref(fig:month) and tree plot of decision tree (Figure \@ref(fig:dtplot), running the marketing campaign at a proper time period could lead to an increase of subscription rate. 
+
+&nbsp; &nbsp; There are potentials for improving the analysis result in future studies, including but not limited to: implementing other classification algorithms such as Support Vector Machine, exploring additional features available to improve model performance, etc.
 
 \newpage
 
 \appendix
 
-# Appendix {-}
+# Remaining Exploratory Visualizations {#otherplot}
 
 
-# Additional details
+```{r marital, fig.align='center', fig.cap="Term Deposit Subscription by Marital Status", fig.width= 6, fig.height=3, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x =marital,color = y, fill = y),position = "fill",alpha =0.7, width = 0.5)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Marital Status",
+       x = "Marital Status",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+```{r default, fig.align='center', fig.cap="Term Deposit Subscription by Default Status", fig.width= 6, fig.height=3, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = default,color = y, fill = y),position = "fill",alpha =0.7, width = 0.4)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Default Status",
+       x = "Whether has Credit in Default",
+       y = "Proportion",
+       caption = "Only three clients in default record, may not illustrate subscription pattern")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+```{r house, fig.align='center', fig.cap="Term Deposit Subscription by Housing Loan", fig.width= 6, fig.height=3, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = housing,color = y, fill = y),position = "fill",alpha =0.7, width = 0.4)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Housing Loan",
+       x = "Whether has Housing Loan",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+```{r personal, fig.align='center', fig.cap="Term Deposit Subscription by Personal Loan", fig.width= 6, fig.height=3, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = housing,color = y, fill = y),position = "fill",alpha =0.7, width = 0.4)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Personal Loan",
+       x = "Whether has Personal Loan",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+```{r dayweek, fig.align='center', fig.cap="Term Deposit Subscription by Last Contact Day of Week", fig.width= 6, fig.height=4, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank)+
+  geom_bar(aes(x = day_of_week,color = y, fill = y),position = "fill",alpha =0.7, width = 0.4)+
+  theme_minimal()+
+  labs(title = "Term Deposit Subscription by Last Contact Day of Week",
+       x = "Day of Week",
+       y = "Proportion")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  coord_flip()
+```
+
+```{r contactcurrent, fig.align='center', fig.cap="Density Distribution of Contacts Performed during Current Campaign", fig.width= 6, fig.height=4, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank, aes(x = campaign, y=..density.., color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5, binwidth = 2)+
+  theme_minimal()+
+  labs(title = "Distribution of Contacts Performed during Current Campaign",
+       x = "Number of Contacts",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+```{r cpi, fig.align='center', fig.cap="Distribution of Subscription by Consumer Price Index", fig.width= 6, fig.height=4, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank, aes(x = cons.price.idx,y = ..density.., color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5, binwidth = 0.15)+
+  theme_minimal()+
+  labs(title = "Distribution of Subscription by Consumer Price Index",
+       x = "Comsumer Price Index (Monthly)",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
+
+```{r cci, fig.align='center', fig.cap="Distribution of Subscription by Consumer Confidence Index", fig.width= 6, fig.height=4, echo= FALSE, message=FALSE, warning=FALSE}
+ggplot(data = clean_bank, aes(x = cons.conf.idx,y = ..density..,color = y, fill = y))+
+  geom_histogram(position = "identity",alpha =0.5, binwidth = 1.5)+
+  theme_minimal()+
+  labs(title = "Distribution of Subscription by Consumer Confidence Index",
+       x = "Comsumer Confidence Index (Monthly)",
+       y = "Density")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_discrete(name = "Subscription", labels = c("No", "Yes"))+
+  scale_color_discrete(name = "Subscription", labels = c("No", "Yes"))
+```
 
 
 \newpage
